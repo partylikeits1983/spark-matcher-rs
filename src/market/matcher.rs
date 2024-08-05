@@ -61,49 +61,59 @@ impl SparkMatcher {
             *last_receive_time = Instant::now();
             duration.as_millis() as i64
         };
-
+    
         info!("-----Trying to match orders");
-
+    
         let match_start = Instant::now();
         info!("Match start time: {:?}", match_start);
-
+    
         let mut buy_queue = BinaryHeap::new();
         let mut sell_queue = BinaryHeap::new();
-
+    
         {
             let buy_orders = self.order_manager.buy_orders.read().await;
             for (_, orders) in buy_orders.iter() {
                 for order in orders {
                     buy_queue.push(order.clone());
+                    if buy_queue.len() >= 10 {
+                        break;
+                    }
+                }
+                if buy_queue.len() >= 10 {
+                    break;
                 }
             }
-
+    
             let sell_orders = self.order_manager.sell_orders.read().await;
             for (_, orders) in sell_orders.iter() {
                 for order in orders {
                     sell_queue.push(Reverse(order.clone()));
+                    if sell_queue.len() >= 10 {
+                        break;
+                    }
+                }
+                if sell_queue.len() >= 10 {
+                    break;
                 }
             }
         }
-
+    
         let mut matches: Vec<(String, String, u128)> = Vec::new();
         let mut total_amount: u128 = 0;
-
-        while let (Some(mut buy_order), Some(Reverse(mut sell_order))) =
-            (buy_queue.pop(), sell_queue.pop())
-        {
+    
+        while let (Some(mut buy_order), Some(Reverse(mut sell_order))) = (buy_queue.pop(), sell_queue.pop()) {
             if buy_order.price >= sell_order.price {
                 let match_amount = std::cmp::min(buy_order.amount, sell_order.amount);
                 matches.push((buy_order.id.clone(), sell_order.id.clone(), match_amount));
                 total_amount += match_amount;
-
+    
                 buy_order.amount -= match_amount;
                 sell_order.amount -= match_amount;
-
+    
                 if buy_order.amount > 0 {
                     buy_queue.push(buy_order);
                 }
-
+    
                 if sell_order.amount > 0 {
                     sell_queue.push(Reverse(sell_order));
                 }
@@ -111,44 +121,28 @@ impl SparkMatcher {
                 sell_queue.push(Reverse(sell_order));
             }
         }
-
+    
         let match_duration = match_start.elapsed().as_millis() as i64;
         info!("Match duration calculated: {}", match_duration);
-
+    
         let matches_len = matches.len();
         if matches_len == 0 {
             return Ok(());
         }
-
+    
         let post_start = Instant::now();
         info!("Post start time: {:?}", post_start);
-
+    
         let unique_order_ids: HashSet<String> = matches
             .iter()
             .flat_map(|(buy_id, sell_id, _)| vec![buy_id.clone(), sell_id.clone()])
             .collect();
-
+    
         let unique_bits256_ids: Vec<Bits256> = unique_order_ids
             .iter()
             .map(|id| Bits256::from_hex_str(id).unwrap())
             .collect();
-        /*
-                    let formatted_log = self.format_order_info(
-                        &matches.iter().map(|(buy_id, _, amount)| (buy_id.clone(), format!("Price: TBD"), *amount)).collect::<Vec<_>>(),
-                        &matches.iter().map(|(_, sell_id, amount)| (sell_id.clone(), format!("Price: TBD"), *amount)).collect::<Vec<_>>()
-                    );
-                    info!("Matched Orders:\n{}", formatted_log);
-
-                    let matches_human: Vec<String> = matches.clone()
-                        .into_iter()
-                        .flat_map(|(buy_id, sell_id, _)| vec![buy_id, sell_id])
-                        .collect();
-
-                    let matches: Vec<Bits256> = matches
-                        .into_iter()
-                        .flat_map(|(buy_id, sell_id, _)| vec![Bits256::from_hex_str(&buy_id).unwrap(), Bits256::from_hex_str(&sell_id).unwrap()])
-                        .collect();
-        */
+    
         println!("=================================================");
         println!("=================================================");
         println!("matches {:?}", matches);
@@ -156,23 +150,7 @@ impl SparkMatcher {
         println!("=================================================");
         let res = self.market.match_order_many(unique_bits256_ids).await;
         self.order_manager.clear_orders().await;
-        /*
-        let a = Bits256::from_hex_str("0x7e9927af85019fa02bc244477f72cb132a7a8b8ea6becf0e30f8a042de2f5397").unwrap();
-        let b = Bits256::from_hex_str("0x48b64d43c40f3a70617475d345bfd709c233e43e3c78e44be42efb77a849f8bd").unwrap();
-
-        println!("=======================================");
-        println!("=======================================");
-        println!("=======================================");
-        let r = self.market.order(b).await.unwrap().value;
-        println!("{:?}", r);
-        let r1 = self.market.order_change_info(b).await.unwrap().value;
-        println!("=======================================");
-        //let r = self.market.order(b).await;
-        println!("{:?}", r1);
-        println!("=======================================");
-        println!("=======================================");
-        */
-
+    
         match res {
             Ok(r) => {
                 let post_duration = post_start.elapsed().as_millis() as i64;
@@ -200,9 +178,10 @@ impl SparkMatcher {
                 return Err(Error::MatchOrdersError(e.to_string()));
             }
         };
-
+    
         Ok(())
     }
+    
 
     fn format_order_info(
         &self,
